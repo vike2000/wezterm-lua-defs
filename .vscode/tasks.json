@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"group": "build",
+			"label": "cargo build --bin generator",
+			"type": "cargo",
+			"command": "build",
+			"args": ["--bin", "generator"],
+			"problemMatcher": ["$rustc"],
+		}
+	]
+}

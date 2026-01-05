@@ -1,0 +1,64 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "lldb generator $general",
+			"type": "lldb",
+			"request": "launch",
+			"cargo": {
+				"args": [
+					"build",
+					"--bin",
+					"generator"
+				],
+				"filter": {
+					"name": "generator",
+					"kind": "bin"
+				}
+			},
+			"args": ["..\\..\\git\\wezterm\\*\\src","..\\..\\git\\wezterm\\lua-api-crates"],
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"RUST_BACKTRACE": "1"
+			},
+		},
+		{
+			"name": "lldb generator $specific",
+			"type": "lldb",
+			"request": "launch",
+			"cargo": {
+				"args": [
+					"build",
+					"--bin",
+					"generator"
+				],
+				"filter": {
+					"name": "generator",
+					"kind": "bin"
+				}
+			},
+			"args": ["..\\..\\git\\wezterm\\lua-api-crates\\time-funcs\\src\\lib.rs"],
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"RUST_BACKTRACE": "1"
+			},
+		},
+		{
+			"name": "cppvsdbg target/debug/generator.exe $specific",
+			"type": "cppvsdbg",
+			"request": "launch",
+			"preLaunchTask": "cargo build --bin generator",
+			"program": "${workspaceFolder}/target/debug/generator.exe",
+			"args": ["..\\..\\git\\wezterm\\lua-api-crates\\time-funcs\\src\\lib.rs"],
+			"stopAtEntry": false,
+			"cwd": "${workspaceFolder}",
+			"environment": [
+				{
+					"name": "RUST_BACKTRACE",
+					"value": "1",
+				},
+			],
+			"console": "externalTerminal"
+		}
+	]
+}
