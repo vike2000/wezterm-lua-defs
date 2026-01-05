@@ -1,0 +1,18 @@
+[package]
+name = "wezterm-lua-defs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+quote = "1"
+clap = { version = "4.5.53", features = ["derive"] }
+walkdir = "2" #cspell:ignore walkdir
+glob = "0.3"
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+regex = "1.12.2"
+
+[[bin]]
+name = "generator"
+path = "src/main.rs"
