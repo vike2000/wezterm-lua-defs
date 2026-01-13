@@ -1,5 +1,6 @@
 	 use anyhow::Result
 	;use std::collections::{HashMap, HashSet}
+	;use itertools::Itertools //cspell:ignore itertools
 	;use clap::{Parser, CommandFactory, ArgAction}
 
 	;use regex::Regex
@@ -465,7 +466,7 @@
 		;			println!("{}",	emit_module_tables(module_root_name, &api.module_paths))
 		
 		;for (name, methods)
-		in					&	api		.userdata
+		in						api		.userdata.iter().sorted_by_key(|i| i.0)
 			{		println!("{}",	emit_userdata(&format!("{}.{}", module_root_name, name), methods))}
 
 		;			println!("{}",	emit_module_functions(module_root_name
@@ -967,6 +968,8 @@ fn lua_params_from_sources(args: &Args, _function_context: &FunctionContext, vis
 	for src in sources {
 		match src {
 			ParamSource::Named {name, ty} => {
+				if name.is_none() {continue}
+
 				let lua_type = map_rust_type(ty, visiting_context);
 
 				let name = name.map(|ident| {
@@ -1022,6 +1025,8 @@ fn extract_closure_signature(args: &Args, function_context: &FunctionContext, vi
 
 
 fn extract_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, _stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, is_async: bool, ipts: Vec<&syn::PatType>, returns: Vec<LuaType>) { //cspell:ignore ipts
+	if lua_name.starts_with("__wezterm_") {return}
+	
 	let mut sources = Vec::new();
 
 	for i in ipts {
@@ -1344,6 +1349,13 @@ fn lua_type_to_luals(t: &LuaType) -> String { //cspell:ignore luals
 	}
 }
 
+fn cmp_path(a: &[String], b: &[String]) -> std::cmp::Ordering {
+	a.iter().zip(b.iter())
+		.map(|(x, y)| x.cmp(y))
+		.find(|o| *o != std::cmp::Ordering::Equal)
+		.unwrap_or_else(|| a.len().cmp(&b.len()))
+}
+
 struct LuaApi {
 	module_paths: HashSet::<Vec<String>>,
 	modules: Vec<LuaFunction>,
@@ -1388,6 +1400,13 @@ fn build_api(functions: HashMap<LuaFunctionKey, LuaFunction>) -> LuaApi {
 fn emit_userdata(name: &str, methods: &[LuaFunction]) -> String {
 	let mut out = String::new();
 
+	let mut methods: Vec<&LuaFunction> = methods.iter().collect();
+	methods.sort_by(|a, b| {
+		a.name
+			.cmp(&b.name)
+			.then_with(|| a.params.len().cmp(&b.params.len()))
+	});
+
 	out.push_str(&format!("---@class {}\n", name));
 	out.push_str(&format!("{} = {{}}\n\n", name));
 
@@ -1416,6 +1435,25 @@ fn emit_userdata(name: &str, methods: &[LuaFunction]) -> String {
 
 fn emit_module_functions(name_root: &str, functions: &[LuaFunction]) -> String {
 	let mut out = String::new();
+
+	let mut functions: Vec<&LuaFunction> = functions.iter().collect();
+	functions.sort_by(|a, b| {
+		match (&a.owner, &b.owner) {
+			(
+				LuaFunctionOwner::Module(pa),
+				LuaFunctionOwner::Module(pb),
+			) => {
+				cmp_path(pa, pb)
+					.then_with(|| a.name.cmp(&b.name))
+					.then_with(|| a.params.len().cmp(&b.params.len()))
+			}
+			// Keep non-module functions last, but stable
+			(LuaFunctionOwner::Module(_), _) => std::cmp::Ordering::Less,
+			(_, LuaFunctionOwner::Module(_)) => std::cmp::Ordering::Greater,
+			_ => std::cmp::Ordering::Equal,
+		}
+	});
+
 
 	for f in functions {
 		match &f.owner {
@@ -1450,7 +1488,7 @@ fn emit_module_functions(name_root: &str, functions: &[LuaFunction]) -> String {
 fn emit_module_tables(name_root: &str, paths: &HashSet<Vec<String>>) -> String {
 	let mut paths: Vec<_> = paths.iter().collect();
 
-	paths.sort_by_key(|p| p.len());
+	paths.sort_by(|a, b| cmp_path(a, b));
 
 	let mut out = String::new();
 

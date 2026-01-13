@@ -45,7 +45,7 @@ if ($lastExitCode) {
 	
 	if (-not $noGit) {
 		# custom simplified variants compared to original at ~vike's profile:
-		function confirmable() {if ($noConfirm -or		$(read-host "<# confirm by regex '^y(es)?$' #> $(			$args -join ' ') # confirm") -match		'^y(es)?$'		) {$A=$args[1..($args.length-1)];&$args[0] @A}}
+#		function confirmable() {if ($noConfirm -or		$(read-host "<# confirm by regex '^y(es)?$' #> $(			$args -join ' ') # confirm") -match		'^y(es)?$'		) {$A=$args[1..($args.length-1)];&$args[0] @A}}
 		function preventable() {if ($noPrevent -or -not($(read-host "<# prevent by not regex '^(y(es)?)?$' #> $(	$args -join ' ') # confirm") -notmatch	'^(y(es)?)?$')	) {$A=$args[1..($args.length-1)];&$args[0] @A}}
 		
 		remove-item -ea 0 alias:pushd	;function pushd{push-location $args[0]
