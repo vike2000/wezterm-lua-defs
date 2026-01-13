@@ -348,7 +348,26 @@
 		{tuple_fields: Vec<syn::Type>
 		,named_fields: HashMap<String, syn::Type>}
 
-	#[allow(dead_code)]
+/*	#[derive(Debug)]
+	struct ParamSource<'a>
+		{pat: &'a syn::Pat
+		,ty: Option<&'a syn::Type>
+		,}*/
+//	#[derive(Debug)]
+	enum ParamSource<'a> {
+		/// name: Option<&Ident>, ty: &Type
+		Named {
+			name: Option<&'a syn::Ident>,
+			ty: &'a syn::Type,
+		},
+
+		/// mlua::MultiValue<T>
+		Variadic {
+			inner: Option<&'a syn::Type>,
+		},
+	}
+
+//	#[allow(dead_code)]
 	#[derive(Debug)]
 	struct LuaParam
 		{name				: Option<String>
@@ -688,30 +707,12 @@ for				LuaRegistrationVisitor<'a> {
 
 		let arg1unwrapped = if call.args.len() < 2 {None} else {Some(unwrap_try(&call.args[1]))};
 
-/*		if call.method == "set" && self.args.debug.unwrap_or_default() > 0 {
-			eprintln!("found .set() at {}:{}",
-				call.span().start().line,
-				call.span().start().column);
-			for (i, arg) in call.args.iter().enumerate() {
-				eprintln!("  arg[{}] = Expr::{}", i, arg.type_str());
-			}
-			if let Some(n) = &name {
-				eprintln!("  arg[0] as str = {}", n);
-			}
-			if let Some(u) = &arg1unwrapped {
-				eprintln!("  arg[1] unwrapped.type_str() = {}", u.type_str());
-			}
-		}*/
-
 		if call.method == "set" && call.args.len() >= 2 {
 			if let Some(lua_name) = &name {
 				let (closure, fn_item) = match arg1unwrapped {
-					Some(syn::Expr::MethodCall(m))
-						if m.method == "create_function" || m.method == "create_async_function" =>
-					{
+					Some(syn::Expr::MethodCall(m)) if m.method == "create_function" || m.method == "create_async_function" => {
 						match m.args.first() {
 							Some(syn::Expr::Closure(c)) => (Some(c), None),
-
 							Some(syn::Expr::Path(p)) => {
 								if let Some(last_seg) = p.path.segments.last() {
 									let ident = last_seg.ident.to_string();
@@ -721,7 +722,6 @@ for				LuaRegistrationVisitor<'a> {
 									(None, None)
 								}
 							}
-
 							_ => (None, None),
 						}
 					}
@@ -733,32 +733,25 @@ for				LuaRegistrationVisitor<'a> {
 				}
 
 				if let Some(closure) = closure {
-					let owner = if let Some(userdata) = &self.visiting_context.current_userdata {
-						LuaFunctionOwner::UserData(userdata.clone())
-					} else if let syn::Expr::Path(p) = call.receiver.as_ref() {
-						if let Some(ident) = p.path.get_ident() {
-							if let Some(path) = self.visiting_context.module_vars.get(&ident.to_string()) {
-								LuaFunctionOwner::Module(path.clone())
-							} else {
-								LuaFunctionOwner::Module(self.visiting_context.current_module.clone())
-							}
-						} else {
-							LuaFunctionOwner::Module(self.visiting_context.current_module.clone())
-						}
-					} else {
-						LuaFunctionOwner::Module(self.visiting_context.current_module.clone())
-					};
+					let owner = (if let Some(userdata) = &self.visiting_context.current_userdata {
+							Some(LuaFunctionOwner::UserData(userdata.clone()))
+						} else if let syn::Expr::Path(p) = call.receiver.as_ref() {
+							if let Some(ident) = p.path.get_ident() {
+								if let Some(path) = self.visiting_context.module_vars.get(&ident.to_string()) {
+									Some(LuaFunctionOwner::Module(path.clone()))
+								} else {None}
+							} else {None}
+						} else {None})
+					.unwrap_or_else(|| LuaFunctionOwner::Module(self.visiting_context.current_module.clone()));
 
 					extract_closure_signature(self.args, self.function_context, self.visiting_context, self.stats, owner, lua_name, LuaFunctionKind::Module, closure);
 				}
 
 				if let Some(fn_item) = fn_item {
-					let owner = if let Some(userdata) = self.visiting_context.current_userdata.clone()
-					{
-						LuaFunctionOwner::UserData(userdata)
-					} else {
-						LuaFunctionOwner::Module(self.visiting_context.current_module.clone())
-					};
+					let owner = (if let Some(userdata) = self.visiting_context.current_userdata.clone() {
+							Some(LuaFunctionOwner::UserData(userdata))
+						} else {None})
+					.unwrap_or_else(|| LuaFunctionOwner::Module(self.visiting_context.current_module.clone()));
 
 					extract_fn_signature(self.args, self.function_context, self.visiting_context, self.stats, owner, lua_name, LuaFunctionKind::Module, &fn_item);
 				}
@@ -793,9 +786,8 @@ fn visit_userdata_impl(args: &Args, function_context: &FunctionContext, visiting
 		return;
 	};
 
-	// Save and clear module context
-	let prev_module = visiting_context.current_module.clone();
-	let prev_userdata = visiting_context.current_userdata.take();
+	let old_module		= visiting_context.current_module.clone();
+	let old_userdata	= visiting_context.current_userdata.take();
 
 	visiting_context.current_module.clear();
 	visiting_context.current_userdata = Some(userdata_type);
@@ -808,9 +800,8 @@ fn visit_userdata_impl(args: &Args, function_context: &FunctionContext, visiting
 		}
 	}
 
-	// Restore context
-	visiting_context.current_userdata = prev_userdata;
-	visiting_context.current_module = prev_module;
+	visiting_context.current_userdata	= old_userdata;
+	visiting_context.current_module		= old_module;
 }
 
 fn visit_add_methods(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, stats: &mut Stats, func: syn::ImplItemFn) {
@@ -830,10 +821,10 @@ fn visit_lua_registration_expr(
 	let method = call.method.to_string();
 
 	let kind = match method.as_str() {
-		"set" => LuaFunctionKind::Module,
-		"add_method" => LuaFunctionKind::Method,
-		"add_async_method" => LuaFunctionKind::AsyncMethod,
-		"add_meta_method" => LuaFunctionKind::MetaMethod,
+		"set"				=> LuaFunctionKind::Module,
+		"add_method"		=> LuaFunctionKind::Method,
+		"add_async_method"	=> LuaFunctionKind::AsyncMethod,
+		"add_meta_method"	=> LuaFunctionKind::MetaMethod,
 		_ => return,
 	};
 
@@ -887,6 +878,77 @@ fn is_mlua_multivalue(ty: &syn::Type) -> bool { //cspell:ignore multivalue
 	}
 }
 
+fn extract_param_sources_from_typed_pat<'a>(pat: &'a syn::Pat, ty: &'a syn::Type, out: &mut Vec<ParamSource<'a>>) {
+	if is_mlua_multivalue(ty) {
+		let inner = match ty {
+			syn::Type::Path(tp) => {
+				if let Some(seg) = tp.path.segments.last() {
+					if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+						args.args.iter().find_map(|arg| {
+							if let syn::GenericArgument::Type(t) = arg {
+								Some(t)
+							} else {
+								None
+							}
+						})
+					} else { // then no PathArguments::AngleBracketed = &seg.arguments
+						None
+					}
+				} else { // then no tp.path.segments.last()
+					None
+				}
+			}
+			_ => None, // <= not Type::Path
+		};
+
+		out.push(ParamSource::Variadic {inner});
+		return; // MultiValue always terminates the parameter list
+	}
+
+	match (pat, ty) {
+		// (a, b): (T1, T2)
+		(syn::Pat::Tuple(pat_tuple), syn::Type::Tuple(ty_tuple)) => {
+			for (p, t) in pat_tuple.elems.iter().zip(ty_tuple.elems.iter()) {
+				extract_param_sources_from_typed_pat(p, t, out);
+
+				// MultiValue inside a tuple still terminates
+				if matches!(out.last(), Some(ParamSource::Variadic {..})) {
+					break;
+				}
+			}
+		}
+
+		// x: T
+		(syn::Pat::Ident(ident), _) => {
+			out.push(ParamSource::Named {
+				name: Some(&ident.ident),
+				ty,
+			});
+		}
+
+		// _: T
+		(syn::Pat::Wild(_), _) => {
+			out.push(ParamSource::Named {
+				name: None,
+				ty,
+			});
+		}
+
+		// &x: T, ref x: T, etc.
+		(syn::Pat::Reference(r), _) => {
+			extract_param_sources_from_typed_pat(&r.pat, ty, out);
+		}
+
+		// Destructuring you do not currently support explicitly but still want *something* emitted
+		_ => {
+			out.push(ParamSource::Named {
+				name: None,
+				ty,
+			});
+		}
+	}
+}
+/*
 fn fn_signature_param(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, _stats: &mut Stats, ty: Option<syn::Type>, pat: syn::Pat) -> LuaParam {
 	LuaParam {
 		name: Some(if args.debug.unwrap_or_default() > 0
@@ -898,145 +960,81 @@ fn fn_signature_param(args: &Args, function_context: &FunctionContext, visiting_
 		},
 	}
 }
+*/
+fn lua_params_from_sources(args: &Args, _function_context: &FunctionContext, visiting_context: &mut VisitingContext, sources: Vec<ParamSource<'_>>) -> Vec<LuaParam> {
+	let mut out = Vec::new();
 
-fn extract_fn_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, func: &syn::ItemFn) {
-	let mut params = Vec::new();
+	for src in sources {
+		match src {
+			ParamSource::Named {name, ty} => {
+				let lua_type = map_rust_type(ty, visiting_context);
 
-	for (idx, input) in func.sig.inputs.iter().enumerate() {
-		// mlua functions always have lua context first //cspell:ignore mlua
-		if idx == 0 {
-			continue;
-		}
-
-		match input {
-			syn::FnArg::Typed(pat_type) => {
-				if is_mlua_multivalue(&pat_type.ty) {
-					params.push(LuaParam {
-						name: None,
-						lua_type: LuaType::Variadic(Box::new(LuaType::Any)),
-					});
-					break; // must be last parameter
-				}
-				
-				match (&*pat_type.pat, &*pat_type.ty) {
-					(syn::Pat::Tuple(pat_tuple), syn::Type::Tuple(ty_tuple)) => {
-						for (pat, ty) in pat_tuple.elems.iter().zip(ty_tuple.elems.iter()) {
-							if is_mlua_multivalue(ty) {
-								params.push(LuaParam {
-									name: None,
-									lua_type: LuaType::Variadic(Box::new(LuaType::Any)),
-								});
-								break;
-							}
-							params.push(fn_signature_param(args, function_context, visiting_context, stats, Some(ty.clone()), pat.clone()));
-						}
+				let name = name.map(|ident| {
+					if args.debug.unwrap_or_default() > 0 {
+						format!("/* {} */ {}", ty.type_str(), ident.to_string())
+					} else {
+						ident.to_string()
 					}
+				});
 
-					_ => {
-						if is_mlua_multivalue(&pat_type.ty) {
-							params.push(LuaParam {
-								name: None,
-								lua_type: LuaType::Variadic(Box::new(LuaType::Any)),
-							});
-						} else {
-							params.push(fn_signature_param(args, function_context, visiting_context, stats, Some(*pat_type.ty.clone()), *pat_type.pat.clone()))
-						}
-					}
-				}
+				out.push(LuaParam { name, lua_type });
 			}
-			syn::FnArg::Receiver(_) => {},
+
+			ParamSource::Variadic {inner} => {
+				let inner_lua = inner
+					.map(|t| map_rust_type(t, visiting_context))
+					.unwrap_or(LuaType::Any);
+
+				out.push(LuaParam {
+					name: None,
+					lua_type: LuaType::Variadic(Box::new(inner_lua)),
+				});
+
+				break; // must be last
+			}
 		}
 	}
 
+	out
+}
+
+fn extract_fn_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, func: &syn::ItemFn) {
+	let inputs = func.sig.inputs.iter().skip(1).filter_map(|i| match i {syn::FnArg::Typed(pat_type) => Some(pat_type), _ => None}).collect();
+	
 	let returns = match &func.sig.output {
 		syn::ReturnType::Default => vec![],
 		syn::ReturnType::Type(_, ty) => vec![map_rust_type(ty, visiting_context)],
 	};
-
-	let func = LuaFunction {
-		file: function_context.file_path.clone(),
-		name: lua_name.to_string(),
-		kind,
-		owner,
-		params,
-		returns,
-		is_async: func.sig.asyncness.is_some(),
-	};
-
-	visiting_context.lua_functions.insert(func.key(), func);
+	
+	extract_signature(args, function_context, visiting_context, stats, owner, lua_name, kind, func.sig.asyncness.is_some(), inputs, returns)
 }
 
-fn extract_closure_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, _stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, closure: &syn::ExprClosure) {
-	let mut params = Vec::new();
-
-	for (idx, input) in closure.inputs.iter().enumerate() {
-		if idx == 0 {
-			continue;
-		}
-
-		match input {
-			syn::Pat::Type(pat_type) => {
-				match pat_type.pat.as_ref() {
-					syn::Pat::Tuple(tuple) => {
-						if let syn::Type::Tuple(ty_tuple) = &*pat_type.ty {
-							for (pat, ty) in tuple.elems.iter().zip(ty_tuple.elems.iter()) {
-								if is_mlua_multivalue(ty) {
-									params.push(LuaParam {
-										name: None,
-										lua_type: LuaType::Variadic(Box::new(LuaType::Any)),
-									});
-									break;
-								}
-
-								if let syn::Pat::Ident(ident) = pat {
-									params.push(LuaParam {
-										name: Some(ident.ident.to_string()),
-										lua_type: map_rust_type(ty, visiting_context),
-									});
-								} else {
-									params.push(LuaParam {
-										name: Some("_".to_string()),
-										lua_type: LuaType::Any,
-									});
-								}
-							}
-						}
-					}
-					syn::Pat::Ident(ident) => {
-						params.push(LuaParam {
-							name: Some(ident.ident.to_string()),
-							lua_type: map_rust_type(&pat_type.ty, visiting_context),
-						});
-					}
-					_ => {}
-				}
-			}
-
-			syn::Pat::Ident(ident) => {
-				params.push(LuaParam {
-					name: Some(ident.ident.to_string()),
-					lua_type: LuaType::Any,
-				});
-			}
-
-			_ => {}
-		}
-	}
-
+fn extract_closure_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, closure: &syn::ExprClosure) {
+	let inputs = closure.inputs.iter().map(|i| match i {syn::Pat::Type(pat_type) => Some(pat_type), _ => None}).flatten().collect();
+	
 	let mut returns = extract_return_from_signature(visiting_context, closure);
 	if returns.is_empty() {
 		returns = infer_return_from_body(args, function_context, visiting_context, &closure.body);
 	}
 
-	let func = LuaFunction {
-		file: function_context.file_path.clone(),
-		name: lua_name.to_string(),
-		kind,
-		owner,
-		params,
-		returns,
-		is_async: closure.asyncness.is_some(), //cspell:ignore asyncness
-	};
+	extract_signature(args, function_context, visiting_context, stats, owner, lua_name, kind, closure.asyncness.is_some(), inputs, returns)
+}
+
+
+fn extract_signature(args: &Args, function_context: &FunctionContext, visiting_context: &mut VisitingContext, _stats: &mut Stats, owner: LuaFunctionOwner, lua_name: &str, kind: LuaFunctionKind, is_async: bool, ipts: Vec<&syn::PatType>, returns: Vec<LuaType>) { //cspell:ignore ipts
+	let mut sources = Vec::new();
+
+	for i in ipts {
+		extract_param_sources_from_typed_pat(&i.pat, &i.ty, &mut sources);
+
+		if matches!(sources.last(), Some(ParamSource::Variadic { .. })) {
+			break;
+		}
+	}
+
+	let params = lua_params_from_sources(args, function_context, visiting_context, sources);
+
+	let func = LuaFunction {file: function_context.file_path.clone(), name: lua_name.to_string(), kind, owner, params, returns, is_async};
 
 	visiting_context.lua_functions.insert(func.key(), func);
 }
@@ -1046,9 +1044,7 @@ fn extract_return_from_signature(visiting_context: &VisitingContext, closure: &s
 		syn::ReturnType::Default => vec![],
 
 		syn::ReturnType::Type(_, ty) => match &**ty {
-			syn::Type::Tuple(t) => t
-				.elems
-				.iter()
+			syn::Type::Tuple(t) => t.elems.iter()
 				.map(|t| map_rust_type(t, visiting_context))
 				.collect(),
 
@@ -1280,7 +1276,6 @@ fn _map_rust_type(ty: &syn::Type, visiting_context: &VisitingContext, resolving:
 fn	span_src<'a>(span: proc_macro2::Span, src: &'a str) -> String {
 	span_src_debug(0, span, src)
 }
-
 fn	span_src_debug<'a>(debug: i8, span: proc_macro2::Span, src: &'a str) -> String {
 	let start	= span.start	();
 	let end		= span.end		();
@@ -1323,26 +1318,26 @@ fn	span_src_debug<'a>(debug: i8, span: proc_macro2::Span, src: &'a str) -> Strin
 		{result = format!("/* start.line {}, start.column {}, \
 				end.line {}, end.column {}, \
 				byte_start {}, byte_end {} */ {}",
-				start.line.to_string(), start.column.to_string(),
-				end.line.to_string(),   end.column.to_string(),
+				start.line.to_string(),	start.column.to_string(),
+				  end.line.to_string(),	  end.column.to_string(),
 				byte_start, byte_end, result);}
 	result
 }
 
 fn lua_type_to_luals(t: &LuaType) -> String { //cspell:ignore luals
 	match t {
-		LuaType::Value => "any".into(),
-		LuaType::Any => "any".into(),
-		LuaType::Nil => "nil".into(),
-		LuaType::Unit => "nil".into(),
-		LuaType::Boolean => "boolean".into(),
-		LuaType::Number => "number".into(),
-		LuaType::String => "string".into(),
-		LuaType::Function => "function".into(),
-		LuaType::Variadic(inner) => format!("... {}", lua_type_to_luals(inner)),
-		LuaType::UserData(name) => name.clone(),
-		LuaType::Optional(inner) => format!("{}?", lua_type_to_luals(inner)),
-		LuaType::Unknown(comment) => {let mut c = comment.to_string();
+		LuaType::Value				=> "any"		.into(),
+		LuaType::Any				=> "any"		.into(),
+		LuaType::Nil				=> "nil"		.into(),
+		LuaType::Unit				=> "nil"		.into(),
+		LuaType::Boolean			=> "boolean"	.into(),
+		LuaType::Number				=> "number"		.into(),
+		LuaType::String				=> "string"		.into(),
+		LuaType::Function			=> "function"	.into(),
+		LuaType::Variadic(inner)	=> format!("... {}",	lua_type_to_luals(inner)),
+		LuaType::UserData(name)		=> name.clone(),
+		LuaType::Optional(inner)	=> format!("{}?",		lua_type_to_luals(inner)),
+		LuaType::Unknown(comment)	=> {let mut c = comment.to_string();
 			c = Regex::new(r"[\r\n]+"	).unwrap().replace_all(&c, ""	).to_string();
 			c = Regex::new(r"\s{2,}"	).unwrap().replace_all(&c, " "	).to_string();
 			format!("any --[[ {} --]]", c)}
@@ -1399,12 +1394,12 @@ fn emit_userdata(name: &str, methods: &[LuaFunction]) -> String {
 	for f in methods {
 		let params = f.params.iter().filter(|p| p.name.as_ref().is_none_or(|n| n != "this")).collect::<Vec<_>>();
 		for p in &params {match &p.name {
-			None	=> out.push_str(&format!("---@param {}\n", lua_type_to_luals(&p.lua_type))),
-			Some(n)	=> out.push_str(&format!("---@param {} {}\n", n, lua_type_to_luals(&p.lua_type))),
+			None	=> out.push_str(&format!("---@param {}\n",			lua_type_to_luals(&p.lua_type))),
+			Some(n)	=> out.push_str(&format!("---@param {} {}\n", n,	lua_type_to_luals(&p.lua_type))),
 		}}
 
 		for ret in &f.returns {
-			out.push_str(&format!("---@return {}\n",lua_type_to_luals(ret)));
+			out.push_str(&format!("---@return {}\n",					lua_type_to_luals(ret)));
 		}
 
 		let params = params.iter()
@@ -1426,12 +1421,12 @@ fn emit_module_functions(name_root: &str, functions: &[LuaFunction]) -> String {
 		match &f.owner {
 			LuaFunctionOwner::Module(path) => {
 				for p in &f.params {match &p.name {
-					None	=> out.push_str(&format!("---@param {}\n", lua_type_to_luals(&p.lua_type))),
-					Some(n)	=> out.push_str(&format!("---@param {} {}\n", n, lua_type_to_luals(&p.lua_type))),
+					None	=> out.push_str(&format!("---@param {}\n",			lua_type_to_luals(&p.lua_type))),
+					Some(n)	=> out.push_str(&format!("---@param {} {}\n", n,	lua_type_to_luals(&p.lua_type))),
 				}}
 
 				for ret in &f.returns {
-					out.push_str(&format!("---@return {}\n", lua_type_to_luals(ret)));
+					out.push_str(&format!("---@return {}\n",					lua_type_to_luals(ret)));
 				}
 
 				let name_full = std::iter::once(name_root)
